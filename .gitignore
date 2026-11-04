@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+models/*.task
+models/*.download
+*.log
+scroll_stats.json
+scroll_stats.tmp
