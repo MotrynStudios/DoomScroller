@@ -1,7 +1,9 @@
 """DoomScroller600 webcam eyebrow scrolling controller.
 
-This is the user's supplied Scroller1200.py baseline, installed under the
-project's canonical filename. See README.md for controls and known limitations.
+Both raised eyebrows scroll forward; one raised eyebrow scrolls backward.
+Camera frames are processed locally. This supplied baseline has no hand
+tracking, and automatic recalibration starts disabled. See README.md for the
+keyboard controls, setup steps, and known limitations.
 """
 
 VERSION = "0.5P"
@@ -11,14 +13,14 @@ import pyautogui
 import time
 from collections import deque
 
-# ---------- Settings ----------
+# ---------- User-adjustable settings ----------
 SCROLL_AMOUNT = 800
 
-# Calibration
+# Calibration learns the relaxed eyebrow distances from 60 camera frames.
 CALIBRATION_FRAMES = 60      # Frames to collect for baseline
 BASELINE_BUFFER_SIZE = 60    # Smoothing for baseline (must be >= CALIBRATION_FRAMES)
 
-# Gesture detection
+# Gesture timing and thresholds. A gesture that stays raised too long is reset.
 GESTURE_HOLD_TIME = 0.08    # Must hold gesture this long (balanced for reliability)
 GESTURE_MAX_DURATION = 0.75  # Maximum gesture duration (prevents long holds from triggering)
 GESTURE_COOLDOWN = 0.3       # Cooldown after triggering (reduced to prevent getting stuck)
@@ -32,7 +34,7 @@ PREVIOUS_THRESHOLD_PERCENT = 0.15  # One eyebrow must be 15% higher than the oth
 FAR_DISTANCE_THRESHOLD = 0.35  # Distance ratio threshold for "far" position
 SHOCK_SPIKE_THRESHOLD = 0.25  # Maximum allowed eyebrow spike for shock detection (increased)
 
-# New features
+# Automatic recalibration can be toggled at runtime with the apostrophe key.
 AUTO_RECALIBRATE = False     # Auto-recalibration toggle
 RECALIBRATION_THRESHOLD = 0.05  # Head offset threshold for auto-recalibration
 POSITION_SENSITIVITY_FACTOR = 0.6  # 60% sensitivity in different positions
@@ -43,8 +45,11 @@ SHOW_GUI = True  # Show/hide GUI text
 CAMERA_INDEX = 0
 # ------------------------------
 
+# Scrolling goes to whichever desktop window is focused. The supplied baseline
+# disables PyAutoGUI's corner failsafe, so press Q to stop the controller.
 pyautogui.FAILSAFE = False
 
+# Face Mesh provides the eyebrow, eyelid, nose, and ear landmarks used below.
 mp_face = mp.solutions.face_mesh
 face_mesh = mp_face.FaceMesh(
     max_num_faces=1,
@@ -53,13 +58,15 @@ face_mesh = mp_face.FaceMesh(
     min_tracking_confidence=0.7
 )
 
+# Open the selected webcam and show a resizable mirrored preview.
 cap = cv2.VideoCapture(CAMERA_INDEX)
 
 # Resizable window
 cv2.namedWindow("Shorts Controller", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Shorts Controller", 960, 540)
 
-# State machine states
+# The gesture state machine moves through learning, neutral, one-brow, and
+# both-brow states. Scroll actions are emitted when the raised pose ends.
 STATE_LEARNING = "LEARNING"
 STATE_NEUTRAL = "NEUTRAL"
 STATE_ONE_BROW = "ONE_BROW"
@@ -67,7 +74,8 @@ STATE_BOTH_BROWS = "BOTH_BROWS"
 
 current_state = STATE_LEARNING
 
-# Calibration data
+# Calibration samples and personalized thresholds are filled after startup or
+# when the user presses C. The rolling histories smooth frame-to-frame jitter.
 left_baseline_samples = []
 right_baseline_samples = []
 left_baseline = None
@@ -120,7 +128,7 @@ head_facing_camera = True  # Track if user is facing camera
 
 
 def calculate_thresholds(current_distance=None):
-    """Calculate personalized thresholds based on user's baseline."""
+    """Derive eyebrow trigger thresholds from the current neutral baseline."""
     global left_threshold, right_threshold
     if unified_baseline is None:
         return
@@ -175,7 +183,7 @@ def trigger_scroll(direction):
 
 
 def get_eyebrow_distances(face):
-    """Calculate eyebrow-to-eyelid distances for left and right."""
+    """Measure each brow's vertical gap from a nearby upper-eyelid landmark."""
     left_brow = face.landmark[105]
     right_brow = face.landmark[334]
     left_lid = face.landmark[159]
@@ -208,7 +216,10 @@ def are_eyes_closed(face):
 
 
 def get_head_orientation(face):
-    """Detect if user is facing camera or looking away using nose position relative to baseline."""
+    """Estimate head direction from nose position relative to the ear midpoint.
+
+    This is a pose estimate, not a check that part of the face is hidden.
+    """
     global head_baseline_x, head_baseline_y
     nose = face.landmark[1]  # Nose tip
     left_ear = face.landmark[234]  # Left ear
@@ -256,7 +267,7 @@ def get_face_distance(face, frame_width, frame_height):
 
 
 def check_eyebrow_visibility(face):
-    """Check if eyebrows are visible in the frame with more lenient bounds."""
+    """Check whether both eyebrow landmarks fall inside the camera frame."""
     left_brow = face.landmark[105]
     right_brow = face.landmark[334]
     
@@ -269,7 +280,7 @@ def check_eyebrow_visibility(face):
 
 
 def should_auto_recalibrate(head_offset_x, head_offset_y):
-    """Check if head position changed enough to trigger auto-recalibration based on head offset."""
+    """Return whether head offset exceeds the configured recalibration limit."""
     global head_baseline_x, head_baseline_y
     if head_baseline_x is None or head_baseline_y is None:
         return False
@@ -336,6 +347,8 @@ def manual_threshold_calibration():
         print(f"Current eyebrow levels - Left: {current_left:.4f}, Right: {current_right:.4f}")
 
 
+# Startup note: calibration needs a visible face; no scroll action is sent
+# until the brow baselines and thresholds have been learned.
 print("Controls:")
 print("C = Recalibrate")
 print("' = Toggle Auto-Recalibration")
@@ -343,6 +356,8 @@ print("\\ = Toggle Manual Threshold")
 print(", = Toggle GUI")
 print("Q = Quit")
 
+# Process one webcam frame at a time. Missing camera frames end the loop; Q
+# exits normally and releases the camera and preview window below.
 while True:
     success, frame = cap.read()
     if not success:
@@ -414,7 +429,7 @@ while True:
         left_smooth = smooth_measurement(left_brow_history)
         right_smooth = smooth_measurement(right_brow_history)
 
-        # ================= LEARNING STATE =================
+        # ================= CALIBRATION =================
         if current_state == STATE_LEARNING:
             left_baseline_samples.append(left_smooth)
             right_baseline_samples.append(right_smooth)
@@ -465,7 +480,8 @@ while True:
             if current_face_distance and face_distance_baseline:
                 calculate_thresholds(current_face_distance)
             
-            # Check for auto-recalibration if enabled (based on head offset)
+            # Optional auto-recalibration is off at startup. When enabled, a
+            # large head-pose change restarts baseline collection.
             if AUTO_RECALIBRATE and should_auto_recalibrate(head_offset_x, head_offset_y):
                 print("Auto-recalibrating due to head position change...")
                 reset_calibration()
@@ -503,7 +519,8 @@ while True:
                 # Optionally add visual feedback for closed eyes
 
             
-            # Only detect gestures if user is facing camera and both eyebrows visible
+            # Gesture input is gated by the head-pose estimate and by both brow
+            # landmarks being in-frame; it does not use a separate gaze model.
             if not head_facing_camera or not left_visible or not right_visible:
                 # Reset to neutral if looking away or eyebrow not visible
                 current_state = STATE_NEUTRAL
@@ -576,7 +593,8 @@ while True:
                     right_drop_time = None
                     continue
 
-                # State machine with locking to prevent flickering
+                # State transitions debounce brow motion, enforce hold limits,
+                # and keep two-brow releases from being read as one-brow gestures.
                 time_since_state_change = time.time() - last_state_change_time
                 
                 if current_state == STATE_NEUTRAL:
@@ -688,7 +706,7 @@ while True:
                             left_raise_time = None
                             right_raise_time = None
 
-    # ================= UI DISPLAY =================
+    # ================= PREVIEW AND KEYBOARD CONTROLS =================
     if SHOW_GUI:
         # Status (top left)
         if current_state == STATE_LEARNING:
@@ -805,3 +823,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+
