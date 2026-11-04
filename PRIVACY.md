@@ -18,4 +18,5 @@ The supplied program does not download model files or send webcam frames to the 
 
 You choose when to run the camera and can stop the program with `Q` or `Ctrl+C`. Do not use the camera to observe other people without considering their privacy and consent. Please do not include identifiable face images or camera recordings in public issues.
 
-For privacy questions, contact the maintainer through [the project repository](https://github.com/theinevitableinvincible/DoomScroller600) or [Discord](https://discord.com/users/543177724450308136).
+For privacy questions, contact the maintainer through [the project repository](https://github.com/theinevitableinvincible/DoomScroller) or [Discord](https://discord.com/users/543177724450308136).
+
